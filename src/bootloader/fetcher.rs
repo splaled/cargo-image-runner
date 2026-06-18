@@ -168,17 +168,6 @@ impl TarXzFetcher {
         }
         std::fs::create_dir_all(&self.cache_dir)?;
 
-        // // Clone the repository
-        // let mut builder = git2::build::RepoBuilder::new();
-        // builder.branch(branch);
-        //
-        // builder
-        //     .clone(url, &dir_path)
-        //     .map_err(|e| Error::bootloader(format!("failed to clone {}: {}", url, e)))?;
-        //
-        // if self.verbose {
-        //     println!("Fetched {} successfully", name);
-        // }
         // Fetch the .tar.xz
         let fetched = reqwest::blocking::get(url.as_str())
             .map_err(
