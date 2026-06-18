@@ -1,5 +1,7 @@
 use crate::core::error::{Error, Result};
 use std::path::{Path, PathBuf};
+use tar::Archive;
+use xz2::read::XzDecoder;
 
 /// Git repository fetcher for bootloader files.
 #[cfg(feature = "limine")]
@@ -117,6 +119,84 @@ impl GitFetcher {
     }
 }
 
+/// .tar.xz release fetcher for bootloader files.
+#[cfg(feature = "limine")]
+pub struct TarXzFetcher {
+    cache_dir: PathBuf,
+    verbose: bool,
+}
+
+#[cfg(feature = "limine")]
+impl TarXzFetcher {
+    /// Create a new .tar.xz fetcher with the specified cache directory.
+    pub fn new(cache_dir: PathBuf, verbose: bool) -> Self {
+        Self { cache_dir, verbose }
+    }
+
+    /// Create an url for limine release.
+    fn create_url(version: &str) -> String {
+        format!("https://github.com/Limine-Bootloader/Limine/releases/download/{}/limine-binary.tar.xz", version)
+    }
+
+    fn unpack_into(&self, tar_file: &[u8], dir_path: &Path) -> Result<PathBuf> {
+        let decompressed = XzDecoder::new(tar_file);
+        let mut archive = Archive::new(decompressed);
+        archive.unpack(dir_path)?;
+        Ok(dir_path.to_path_buf().join("limine-binary"))
+    }
+
+    /// Fetch a release to the cache directory.
+    ///
+    /// If the directory already exists, it will be used as-is.
+    /// If not, release will be downloaded and unpacked.
+    pub fn fetch(&self, name: &str, version: &str) -> Result<PathBuf> {
+        let dir_path = self.cache_dir.join(format!("{}-{}", name, version));
+        let binary_path = dir_path.join("limine-binary");
+
+        // If directory exists, assume it's already fetched
+        if binary_path.exists() {
+            if self.verbose {
+                println!("Using cached {} from {}", name, binary_path.display());
+            }
+            return Ok(binary_path);
+        }
+
+        let url = TarXzFetcher::create_url(version);
+
+        if self.verbose {
+            println!("Fetching {} from {}...", name, url.as_str());
+        }
+        std::fs::create_dir_all(&self.cache_dir)?;
+
+        // // Clone the repository
+        // let mut builder = git2::build::RepoBuilder::new();
+        // builder.branch(branch);
+        //
+        // builder
+        //     .clone(url, &dir_path)
+        //     .map_err(|e| Error::bootloader(format!("failed to clone {}: {}", url, e)))?;
+        //
+        // if self.verbose {
+        //     println!("Fetched {} successfully", name);
+        // }
+        // Fetch the .tar.xz
+        let fetched = reqwest::blocking::get(url.as_str())
+            .map_err(
+                |e| Error::bootloader(format!("failed to fetch {}: {}", url.as_str(), e))
+            )?;
+        let status = fetched.status();
+        if status != reqwest::StatusCode::OK {
+            return Err(Error::bootloader(format!("failed to fetch {}: {}", url.as_str(), status)));
+        }
+
+        let data = fetched.bytes().map_err(
+            |e| Error::bootloader(format!("failed to fetch {}: {}", url.as_str(), e))
+        )?;
+
+        self.unpack_into(&data, &dir_path)
+    }
+}
+
 // Stub implementation when limine feature is disabled
 #[cfg(not(feature = "limine"))]
 pub struct GitFetcher;
@@ -136,6 +216,20 @@ impl GitFetcher {
     }
 
     pub fn copy_files(&self, _repo_path: &Path, _files: &[&str], _dest_dir: &Path) -> Result<Vec<PathBuf>> {
+        Err(Error::feature_not_enabled("limine"))
+    }
+}
+
+#[cfg(not(feature = "limine"))]
+pub struct TarXzFetcher;
+
+#[cfg(not(feature = "limine"))]
+impl TarXzFetcher {
+    pub fn new(_: PathBuf, _: bool) -> Self {
+        Self
+    }
+
+    pub fn fetch(&self, _: &str, _: &str) -> Result<PathBuf> {
         Err(Error::feature_not_enabled("limine"))
     }
 }

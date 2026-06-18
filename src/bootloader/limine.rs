@@ -3,7 +3,7 @@ use crate::config::BootType;
 use crate::core::context::Context;
 use crate::core::error::{Error, Result};
 use std::path::PathBuf;
-
+use crate::bootloader::fetcher::TarXzFetcher;
 #[cfg(feature = "limine")]
 use super::GitFetcher;
 
@@ -37,14 +37,29 @@ impl LimineBootloader {
         &ctx.config.bootloader.limine.version
     }
 
-    /// Fetch Limine binaries from git.
+    /// Fetch Limine binaries.
+    /// Use git if version is less than v12, else use .tar.xz.
     #[cfg(feature = "limine")]
     fn fetch_limine(&self, ctx: &Context) -> Result<PathBuf> {
         let version = self.get_version(ctx);
         let cache_dir = ctx.cache_dir.join("bootloaders");
 
-        let fetcher = GitFetcher::new(cache_dir, ctx.config.verbose);
-        fetcher.fetch_ref(&self.repo_url, "limine", version)
+        let major = &version[1..].split(".").next().ok_or(Error::Config(format!(
+            "invalid limine version: {}",
+            version
+        )))?;
+
+        let major: u64 = major
+            .parse()
+            .map_err(|_| Error::Config(format!("invalid limine version: {}", version)))?;
+
+        if major < 12 {
+            let fetcher = GitFetcher::new(cache_dir, ctx.config.verbose);
+            fetcher.fetch_ref(&self.repo_url, "limine", version)
+        } else {
+            let fetcher = TarXzFetcher::new(cache_dir, ctx.config.verbose);
+            fetcher.fetch("limine", version)
+        }
     }
 
     /// Stub when limine feature is disabled.
@@ -62,18 +77,18 @@ impl Default for LimineBootloader {
 
 impl Bootloader for LimineBootloader {
     fn prepare(&self, ctx: &Context) -> Result<BootloaderFiles> {
-        let limine_repo = self.fetch_limine(ctx)?;
+        let limine_folder = self.fetch_limine(ctx)?;
 
         let mut files = BootloaderFiles::new();
 
         // Prepare BIOS files if needed
         if ctx.config.boot.boot_type.needs_bios() {
             // Copy limine-bios.sys to boot directory
-            let limine_bios = limine_repo.join("limine-bios.sys");
+            let limine_bios = limine_folder.join("limine-bios.sys");
             if !limine_bios.exists() {
                 return Err(Error::bootloader(
-                    "limine-bios.sys not found in Limine repository. \
-                     Make sure you're using a binary release (e.g., v8.x-binary)."
+                    "limine-bios.sys not found in Limine folder. \
+                     Make sure the release contains limine-binary-ver.tar.xz or you're using a binary release (e.g., v8.x-binary)."
                         .to_string(),
                 ));
             }
@@ -81,11 +96,11 @@ impl Bootloader for LimineBootloader {
             files = files.add_system_file(limine_bios, "limine-bios.sys".into());
 
             // CD-specific BIOS boot binary for ISO images
-            let limine_bios_cd = limine_repo.join("limine-bios-cd.bin");
+            let limine_bios_cd = limine_folder.join("limine-bios-cd.bin");
             if !limine_bios_cd.exists() {
                 return Err(Error::bootloader(
-                    "limine-bios-cd.bin not found in Limine repository. \
-                     Make sure you're using a binary release (e.g., v8.x-binary)."
+                    "limine-bios-cd.bin not found in Limine folder. \
+                     Make sure the release contains limine-binary-ver.tar.xz or you're using a binary release (e.g., v8.x-binary)."
                         .to_string(),
                 ));
             }
@@ -95,11 +110,11 @@ impl Bootloader for LimineBootloader {
         // Prepare UEFI files if needed
         if ctx.config.boot.boot_type.needs_uefi() {
             // Copy BOOTX64.EFI to EFI/BOOT directory
-            let bootx64 = limine_repo.join("BOOTX64.EFI");
+            let bootx64 = limine_folder.join("BOOTX64.EFI");
             if !bootx64.exists() {
                 return Err(Error::bootloader(
-                    "BOOTX64.EFI not found in Limine repository. \
-                     Make sure you're using a binary release (e.g., v8.x-binary)."
+                    "BOOTX64.EFI not found in Limine folder. \
+                     Make sure the release contains limine-binary-ver.tar.xz or you're using a binary release (e.g., v8.x-binary)."
                         .to_string(),
                 ));
             }
@@ -107,11 +122,11 @@ impl Bootloader for LimineBootloader {
             files = files.add_uefi_file(bootx64, "efi/boot/bootx64.efi".into());
 
             // CD-specific UEFI boot binary for ISO images
-            let limine_uefi_cd = limine_repo.join("limine-uefi-cd.bin");
+            let limine_uefi_cd = limine_folder.join("limine-uefi-cd.bin");
             if !limine_uefi_cd.exists() {
                 return Err(Error::bootloader(
-                    "limine-uefi-cd.bin not found in Limine repository. \
-                     Make sure you're using a binary release (e.g., v8.x-binary)."
+                    "limine-uefi-cd.bin not found in Limine folder. \
+                     Make sure the release contains limine-binary-ver.tar.xz or you're using a binary release (e.g., v8.x-binary)."
                         .to_string(),
                 ));
             }
@@ -143,8 +158,7 @@ impl Bootloader for LimineBootloader {
 
         if config_path.exists() {
             configs.push(
-                ConfigFile::new(config_path, "limine.conf".into())
-                    .with_template_processing(),
+                ConfigFile::new(config_path, "limine.conf".into()).with_template_processing(),
             );
         } else {
             // Generate a default limine.conf if none exists
@@ -175,11 +189,19 @@ impl Bootloader for LimineBootloader {
             ));
         }
 
+        let major = &version[1..].split(".").next().ok_or(Error::config(format!(
+            "invalid limine version: {}",
+            version
+        )))?;
+        let major: u64 = major
+            .parse()
+            .map_err(|_| Error::config(format!("invalid limine version: {}", version)))?;
+
         // Recommend binary releases
-        if !version.contains("binary") {
+        if major < 12 && !version.contains("binary") {
             eprintln!(
                 "Warning: Limine version '{}' may require building from source. \
-                 Consider using a binary release like 'v8.x-binary' for faster builds.",
+                 Consider using at least v12.0 or a binary release like 'v8.x-binary' for faster builds.",
                 version
             );
         }

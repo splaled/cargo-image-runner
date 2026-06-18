@@ -28,7 +28,7 @@ bios = []
 uefi = ["dep:ovmf-prebuilt"]
 
 # Bootloaders
-limine = ["dep:git2"]
+limine = ["dep:git2", "dep:reqwest", "dep:tar", "dep:xz2"]
 grub = []
 
 # Image formats
@@ -58,6 +58,9 @@ toml = "0.8"
 
 # Optional dependencies
 git2 = { version = "0.20", optional = true }
+reqwest = { version = "0.13.4", optional = true, features = ["blocking"] }
+tar = { version = "0.4.46", optional = true }
+xz2 = { version = "0.1.7", optional = true }
 hadris-iso = { version = "0.2.1", optional = true }
 hadris-fat = { version = "0.3.1", optional = true, features = ["write", "lfn"] }
 fatfs = { version = "0.3", optional = true, features = ["std"] }
